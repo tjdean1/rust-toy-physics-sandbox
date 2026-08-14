@@ -1,14 +1,12 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Core types for the `rust-physics` simulation engine.
+//!
+//! Milestone 0.1 models translational rigid-body motion in three dimensions.
+//! Unless otherwise noted, the crate uses SI units.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod integration;
+mod rigid_body;
+mod world;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use glam::Vec3;
+pub use rigid_body::{InvalidMass, RigidBody};
+pub use world::{BodyHandle, InvalidTimestep, PhysicsWorld};

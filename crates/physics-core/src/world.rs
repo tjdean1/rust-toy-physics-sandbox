@@ -2,12 +2,16 @@ use std::{error::Error, fmt};
 
 use glam::Vec3;
 
-use crate::{RigidBody, integration::semi_implicit_euler};
+use crate::{
+    CollisionShape, Contact, RigidBody,
+    collision::{resolve_static_contact, sphere_plane_contact},
+    integration::semi_implicit_euler,
+};
 
 /// Identifies a rigid body stored in a [`PhysicsWorld`].
 ///
-/// Handles remain valid because Milestone 0.1 only appends bodies. The internal
-/// representation is private so it can evolve when body removal is introduced.
+/// Handles remain valid because the world currently only appends bodies. The
+/// internal representation is private so it can evolve when removal is added.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BodyHandle(usize);
 
@@ -16,6 +20,7 @@ pub struct BodyHandle(usize);
 pub struct PhysicsWorld {
     gravity: Vec3,
     bodies: Vec<RigidBody>,
+    contacts: Vec<Contact>,
 }
 
 impl PhysicsWorld {
@@ -32,6 +37,7 @@ impl PhysicsWorld {
         Self {
             gravity,
             bodies: Vec::new(),
+            contacts: Vec::new(),
         }
     }
 
@@ -67,7 +73,18 @@ impl PhysicsWorld {
         &self.bodies
     }
 
+    /// Returns contacts generated during the most recent successful step.
+    ///
+    /// Contact geometry describes the state before penetration correction.
+    pub fn contacts(&self) -> &[Contact] {
+        &self.contacts
+    }
+
     /// Advances the simulation by `dt` seconds using semi-implicit Euler.
+    ///
+    /// Collision detection runs after integration. Milestone 0.2 resolves
+    /// dynamic spheres against static planes with positional correction and a
+    /// frictionless normal response.
     ///
     /// Zero is accepted as a no-time step and still clears accumulated forces.
     /// Negative, infinite, and NaN timesteps are rejected without changing the
@@ -85,7 +102,57 @@ impl PhysicsWorld {
             semi_implicit_euler(body, dt);
         }
 
+        self.contacts = self.generate_contacts();
+        self.resolve_contacts();
+
         Ok(())
+    }
+
+    fn generate_contacts(&self) -> Vec<Contact> {
+        let mut contacts = Vec::new();
+
+        for (sphere_index, sphere_body) in self.bodies.iter().enumerate() {
+            if sphere_body.is_static() {
+                continue;
+            }
+
+            let Some(CollisionShape::Sphere(sphere)) = sphere_body.collision_shape() else {
+                continue;
+            };
+
+            for (plane_index, plane_body) in self.bodies.iter().enumerate() {
+                if !plane_body.is_static() {
+                    continue;
+                }
+
+                let Some(CollisionShape::Plane(plane)) = plane_body.collision_shape() else {
+                    continue;
+                };
+
+                if let Some(geometry) = sphere_plane_contact(sphere_body, sphere, plane_body, plane)
+                {
+                    contacts.push(Contact::new(
+                        BodyHandle(sphere_index),
+                        BodyHandle(plane_index),
+                        geometry,
+                    ));
+                }
+            }
+        }
+
+        contacts
+    }
+
+    fn resolve_contacts(&mut self) {
+        for contact in self.contacts.iter().copied() {
+            let sphere_index = contact.body_a().0;
+            let plane_index = contact.body_b().0;
+            let restitution = self.bodies[sphere_index]
+                .restitution()
+                .min(self.bodies[plane_index].restitution());
+
+            resolve_static_contact(&mut self.bodies[sphere_index], contact, restitution);
+        }
     }
 }
 

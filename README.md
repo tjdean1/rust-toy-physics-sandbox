@@ -4,12 +4,13 @@
 Rust. The engine is being built from scratch as a long-term project, with an
 emphasis on clear, testable physics code that remains independent of rendering.
 
-Milestone 0.1 currently provides basic rigid-body translation, accumulated
-forces, configurable gravity, and fixed-timestep semi-implicit Euler
-integration. It does not yet include collisions, rotation, constraints, or
-rendering.
+Milestone 0.2 currently provides basic rigid-body translation, accumulated
+forces, configurable gravity, fixed-timestep semi-implicit Euler integration,
+sphere and plane collision shapes, and restitution-based sphere collisions with
+static planes. It does not yet include sphere-to-sphere collisions, rotation,
+friction, constraints, or rendering.
 
-Run the command-line free-fall demonstration with:
+Run the command-line bouncing-sphere demonstration with:
 
 ```bash
 cargo run -p sandbox

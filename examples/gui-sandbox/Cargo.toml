@@ -1,0 +1,13 @@
+[package]
+name = "gui-sandbox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.35.0", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
+physics-core = { path = "../../crates/physics-core" }

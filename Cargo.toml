@@ -3,5 +3,6 @@ resolver = "2"
 
 members = [
     "crates/physics-core",
+    "examples/gui-sandbox",
     "examples/sandbox",
 ]

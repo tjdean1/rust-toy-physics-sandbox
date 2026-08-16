@@ -9,14 +9,15 @@ the simulation.
 
 ## Current status
 
-The project currently includes the work completed through Milestone 0.2.1:
+The project currently includes the work completed through Milestone 0.3:
 
 | Milestone | Capability | Status |
 | --- | --- | --- |
 | 0.1 | Gravity, forces, and basic rigid-body translation | Complete |
 | 0.2 | Sphere shapes, static planes, contacts, and bouncing | Complete |
 | 0.2.1 | Interactive desktop sandbox with a 2D projection | Complete |
-| 0.3 | Sphere-to-sphere collision | Next |
+| 0.3 | Sphere-to-sphere collision and impulse response | Complete |
+| 1.0 | Rigid-body rotation | Next |
 
 ### Physics engine
 
@@ -28,16 +29,19 @@ The project currently includes the work completed through Milestone 0.2.1:
 - Semi-implicit Euler integration using timesteps in seconds
 - Validated sphere and infinite-plane collision shapes
 - Dynamic-sphere versus static-plane contact detection
+- Dynamic-sphere collisions with dynamic or static spheres
 - Contact point, normal, penetration depth, and body handles
 - Positional penetration correction
 - Frictionless restitution-based collision response
+- Inverse-mass-weighted impulses and penetration correction
 - Rejection of invalid mass, restitution, shape, and timestep values
 
 ### Interactive sandbox
 
 - X/Y projection of the 3D simulation with a world-space grid
 - Add and remove spheres
-- Enable or disable a static ground plane
+- Independently enable a ground, side walls, and ceiling
+- Configure wall half-width, ceiling distance, and boundary restitution
 - Edit position, velocity, mass, radius, restitution, gravity, and ground height
 - Configure the fixed simulation timestep
 - Play, pause, single-step, and reset the simulation
@@ -69,10 +73,9 @@ cargo run -p gui-sandbox
 ```
 
 The first GUI build takes longer because Cargo must compile the native windowing
-stack. Edit scene values in the left panel and press **Reset** to apply them,
-then press **Play** or **Single Step**. Multiple spheres can be visualized, but
-they currently interact only with static planes; sphere-to-sphere collision is
-planned for Milestone 0.3.
+stack. The default scene demonstrates two spheres of different masses colliding
+head-on. Edit scene values in the left panel and press **Reset** to apply them,
+then press **Play** or **Single Step**.
 
 ### Command-line sandbox
 
@@ -80,8 +83,8 @@ planned for Milestone 0.3.
 cargo run -p sandbox
 ```
 
-This runs a fixed-timestep bouncing-sphere simulation and prints its height,
-vertical velocity, and sphere-plane contact events. It requires no desktop GUI.
+This runs a fixed-timestep head-on collision between two spheres and prints
+their positions, velocities, and contact event. It requires no desktop GUI.
 
 ### Tests
 
@@ -91,9 +94,10 @@ cargo test
 
 The test suite covers fundamental motion, gravity, mass-independent
 gravitational acceleration, forces, static bodies, invalid inputs, collision
-shape validation, sphere-plane contact geometry, penetration correction,
-restitution, and agreement between GUI-configured and directly constructed
-headless simulations.
+shape validation, sphere-plane and sphere-sphere contact geometry, penetration
+correction, restitution, momentum and energy conservation, coincident centers,
+and agreement between GUI-configured and directly constructed headless
+simulations.
 
 ## Using `physics-core`
 
@@ -151,11 +155,13 @@ Each successful world step currently performs these operations:
 2. Compute acceleration from accumulated force and inverse mass.
 3. Update velocity, then position, using semi-implicit Euler integration.
 4. Clear accumulated forces.
-5. Detect dynamic-sphere versus static-plane contacts.
-6. Correct penetration and resolve incoming normal velocity.
+5. Detect sphere-plane and sphere-sphere contacts.
+6. Correct penetration and resolve incoming relative normal velocity.
 
 Collision response is discrete and frictionless. A collision pair uses the
-lower restitution coefficient of its two bodies.
+lower restitution coefficient of its two bodies. Sphere-pair impulses and
+position corrections are weighted by inverse mass, so linear momentum is
+conserved by isolated collision response.
 
 ## Workspace layout
 
@@ -195,7 +201,6 @@ ignored by Git. Cargo recreates it locally whenever the project is built.
 
 The following systems have not been implemented yet:
 
-- Sphere-to-sphere collision
 - Rotation, angular velocity, and torque
 - Box collision shapes
 - Friction and stable contact solving
@@ -205,6 +210,6 @@ The following systems have not been implemented yet:
 - Built-in 3D rendering
 - ECS integration
 
-The next planned milestone is **0.3: Sphere-to-Sphere Collisions**, introducing
-impulse-based response between moving bodies, momentum handling, restitution,
-and penetration correction.
+The next planned milestone is **1.0: Rotation**, extending bodies with
+orientation, angular velocity, torque, moment of inertia, and rotational
+integration.

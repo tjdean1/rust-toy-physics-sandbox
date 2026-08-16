@@ -4,7 +4,7 @@ use glam::Vec3;
 
 use crate::{
     CollisionShape, Contact, RigidBody,
-    collision::{resolve_static_contact, sphere_plane_contact},
+    collision::{resolve_contact, sphere_plane_contact, sphere_sphere_contact},
     integration::semi_implicit_euler,
 };
 
@@ -82,9 +82,9 @@ impl PhysicsWorld {
 
     /// Advances the simulation by `dt` seconds using semi-implicit Euler.
     ///
-    /// Collision detection runs after integration. Milestone 0.2 resolves
-    /// dynamic spheres against static planes with positional correction and a
-    /// frictionless normal response.
+    /// Collision detection runs after integration. Dynamic spheres collide with
+    /// static planes and other spheres using positional correction and a
+    /// frictionless normal impulse.
     ///
     /// Zero is accepted as a no-time step and still clears accumulated forces.
     /// Negative, infinite, and NaN timesteps are rejected without changing the
@@ -140,19 +140,58 @@ impl PhysicsWorld {
             }
         }
 
+        for body_a_index in 0..self.bodies.len() {
+            let body_a = &self.bodies[body_a_index];
+            let Some(CollisionShape::Sphere(sphere_a)) = body_a.collision_shape() else {
+                continue;
+            };
+
+            for body_b_index in (body_a_index + 1)..self.bodies.len() {
+                let body_b = &self.bodies[body_b_index];
+                if body_a.is_static() && body_b.is_static() {
+                    continue;
+                }
+
+                let Some(CollisionShape::Sphere(sphere_b)) = body_b.collision_shape() else {
+                    continue;
+                };
+
+                if let Some(geometry) = sphere_sphere_contact(body_a, sphere_a, body_b, sphere_b) {
+                    contacts.push(Contact::new(
+                        BodyHandle(body_a_index),
+                        BodyHandle(body_b_index),
+                        geometry,
+                    ));
+                }
+            }
+        }
+
         contacts
     }
 
     fn resolve_contacts(&mut self) {
         for contact in self.contacts.iter().copied() {
-            let sphere_index = contact.body_a().0;
-            let plane_index = contact.body_b().0;
-            let restitution = self.bodies[sphere_index]
-                .restitution()
-                .min(self.bodies[plane_index].restitution());
-
-            resolve_static_contact(&mut self.bodies[sphere_index], contact, restitution);
+            let (body_a, body_b) =
+                two_bodies_mut(&mut self.bodies, contact.body_a().0, contact.body_b().0);
+            let restitution = body_a.restitution().min(body_b.restitution());
+            resolve_contact(body_a, body_b, contact, restitution);
         }
+    }
+}
+
+fn two_bodies_mut(
+    bodies: &mut [RigidBody],
+    body_a_index: usize,
+    body_b_index: usize,
+) -> (&mut RigidBody, &mut RigidBody) {
+    debug_assert_ne!(body_a_index, body_b_index);
+
+    if body_a_index < body_b_index {
+        let (before_b, from_b) = bodies.split_at_mut(body_b_index);
+        (&mut before_b[body_a_index], &mut from_b[0])
+    } else {
+        let (before_a, from_a) = bodies.split_at_mut(body_a_index);
+        (&mut from_a[0], &mut before_a[body_b_index])
     }
 }
 

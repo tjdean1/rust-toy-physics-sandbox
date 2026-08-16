@@ -8,6 +8,53 @@ use simulation::{SceneConfig, Simulation, SphereConfig};
 
 const MAX_STEPS_PER_FRAME: usize = 16;
 
+#[derive(Default)]
+struct AxisBoundaries {
+    left: Option<f32>,
+    right: Option<f32>,
+    ground: Option<f32>,
+    ceiling: Option<f32>,
+}
+
+impl AxisBoundaries {
+    fn record(&mut self, position: Vec2, normal: Vec2) {
+        if normal.x.abs() > normal.y.abs() {
+            if normal.x > 0.0 {
+                self.left = Some(position.x);
+            } else {
+                self.right = Some(position.x);
+            }
+        } else if normal.y > 0.0 {
+            self.ground = Some(position.y);
+        } else {
+            self.ceiling = Some(position.y);
+        }
+    }
+
+    fn segments(&self, visible_min: Vec2, visible_max: Vec2) -> Vec<(Vec2, Vec2)> {
+        let min_x = self.left.unwrap_or(visible_min.x);
+        let max_x = self.right.unwrap_or(visible_max.x);
+        let min_y = self.ground.unwrap_or(visible_min.y);
+        let max_y = self.ceiling.unwrap_or(visible_max.y);
+        let mut segments = Vec::with_capacity(4);
+
+        if let Some(ground) = self.ground {
+            segments.push((Vec2::new(min_x, ground), Vec2::new(max_x, ground)));
+        }
+        if let Some(ceiling) = self.ceiling {
+            segments.push((Vec2::new(min_x, ceiling), Vec2::new(max_x, ceiling)));
+        }
+        if let Some(left) = self.left {
+            segments.push((Vec2::new(left, min_y), Vec2::new(left, max_y)));
+        }
+        if let Some(right) = self.right {
+            segments.push((Vec2::new(right, min_y), Vec2::new(right, max_y)));
+        }
+
+        segments
+    }
+}
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -92,7 +139,7 @@ impl SandboxApp {
             .default_size(330.0)
             .show(root_ui, |ui| {
                 ui.heading("rust-physics");
-                ui.label("Milestone 0.2.1 · Interactive 2D Sandbox");
+                ui.label("Milestone 0.3 · Sphere-to-Sphere Collisions");
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
@@ -180,7 +227,7 @@ impl SandboxApp {
                         );
                     }
                 });
-                ui.small("Sphere-to-sphere collision is planned for Milestone 0.3.");
+                ui.small("Spheres collide using frictionless, mass-aware impulses.");
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if let Some(sphere) = self.config.spheres.get_mut(self.selected_sphere) {
@@ -207,22 +254,43 @@ impl SandboxApp {
                     }
 
                     ui.separator();
-                    ui.strong("Ground plane");
-                    ui.checkbox(&mut self.config.ground_enabled, "Enabled");
-                    ui.add_enabled_ui(self.config.ground_enabled, |ui| {
-                        egui::Grid::new("ground_settings")
-                            .num_columns(2)
-                            .show(ui, |ui| {
-                                drag_row(ui, "Height", &mut self.config.ground_height, 0.1, " m");
-                                ui.label("Restitution");
-                                ui.add(
-                                    egui::DragValue::new(&mut self.config.ground_restitution)
-                                        .range(0.0..=1.0)
-                                        .speed(0.01),
-                                );
-                                ui.end_row();
-                            });
-                    });
+                    ui.strong("Boundary planes");
+                    ui.checkbox(&mut self.config.ground_enabled, "Ground");
+                    ui.checkbox(&mut self.config.side_walls_enabled, "Left and right walls");
+                    ui.checkbox(&mut self.config.ceiling_enabled, "Ceiling");
+                    egui::Grid::new("boundary_settings")
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            drag_row(
+                                ui,
+                                "Ground height",
+                                &mut self.config.ground_height,
+                                0.1,
+                                " m",
+                            );
+                            positive_row(
+                                ui,
+                                "Wall half-width",
+                                &mut self.config.wall_distance,
+                                0.1,
+                                " m",
+                            );
+                            positive_row(
+                                ui,
+                                "Ceiling above ground",
+                                &mut self.config.ceiling_distance,
+                                0.1,
+                                " m",
+                            );
+                            ui.label("Restitution");
+                            ui.add(
+                                egui::DragValue::new(&mut self.config.boundary_restitution)
+                                    .range(0.0..=1.0)
+                                    .speed(0.01),
+                            );
+                            ui.end_row();
+                        });
+                    ui.small("Walls are placed at ± half-width from x=0.");
 
                     ui.separator();
                     ui.strong("Selected runtime state");
@@ -331,16 +399,7 @@ impl SandboxApp {
     }
 
     fn draw_scene(&self, painter: &egui::Painter, rect: Rect) {
-        for body in self.simulation.world().bodies() {
-            if let Some(CollisionShape::Plane(_)) = body.collision_shape() {
-                let left = self.world_to_screen(rect, [-10_000.0, body.position().y]);
-                let right = self.world_to_screen(rect, [10_000.0, body.position().y]);
-                painter.line_segment(
-                    [left, right],
-                    Stroke::new(3.0, Color32::from_rgb(100, 190, 115)),
-                );
-            }
-        }
+        self.draw_boundaries(painter, rect);
 
         for (index, handle) in (0..self.config.spheres.len()).filter_map(|index| {
             self.simulation
@@ -392,6 +451,34 @@ impl SandboxApp {
         }
     }
 
+    fn draw_boundaries(&self, painter: &egui::Painter, rect: Rect) {
+        let mut boundaries = AxisBoundaries::default();
+        for body in self.simulation.world().bodies() {
+            if let Some(CollisionShape::Plane(plane)) = body.collision_shape() {
+                let normal = plane.normal();
+                boundaries.record(
+                    Vec2::new(body.position().x, body.position().y),
+                    Vec2::new(normal.x, normal.y),
+                );
+            }
+        }
+
+        let half_width = rect.width() * 0.5 / self.pixels_per_meter;
+        let half_height = rect.height() * 0.5 / self.pixels_per_meter;
+        let visible_min = self.camera_center - Vec2::new(half_width, half_height);
+        let visible_max = self.camera_center + Vec2::new(half_width, half_height);
+
+        for (start, end) in boundaries.segments(visible_min, visible_max) {
+            painter.line_segment(
+                [
+                    self.world_to_screen(rect, [start.x, start.y]),
+                    self.world_to_screen(rect, [end.x, end.y]),
+                ],
+                Stroke::new(3.0, Color32::from_rgb(100, 190, 115)),
+            );
+        }
+    }
+
     fn world_to_screen(&self, rect: Rect, point: [f32; 2]) -> Pos2 {
         Pos2::new(
             rect.center().x + (point[0] - self.camera_center.x) * self.pixels_per_meter,
@@ -433,4 +520,31 @@ fn positive_row(ui: &mut egui::Ui, label: &str, value: &mut f32, speed: f64, suf
             .suffix(suffix),
     );
     ui.end_row();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enclosure_lines_stop_at_boundary_intersections() {
+        let boundaries = AxisBoundaries {
+            left: Some(-4.0),
+            right: Some(4.0),
+            ground: Some(0.0),
+            ceiling: Some(6.0),
+        };
+
+        let segments = boundaries.segments(Vec2::splat(-10.0), Vec2::splat(10.0));
+
+        assert_eq!(
+            segments,
+            vec![
+                (Vec2::new(-4.0, 0.0), Vec2::new(4.0, 0.0)),
+                (Vec2::new(-4.0, 6.0), Vec2::new(4.0, 6.0)),
+                (Vec2::new(-4.0, 0.0), Vec2::new(-4.0, 6.0)),
+                (Vec2::new(4.0, 0.0), Vec2::new(4.0, 6.0)),
+            ]
+        );
+    }
 }

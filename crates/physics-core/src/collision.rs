@@ -78,9 +78,9 @@ impl From<Plane> for CollisionShape {
 
 /// Contact information generated before penetration correction.
 ///
-/// For Milestone 0.2, `body_a` is a dynamic sphere and `body_b` is a static
-/// plane. The normal points from the plane toward the sphere, the point lies on
-/// the plane, and penetration depth is measured in meters.
+/// The normal always points from `body_b` toward `body_a`. The contact point is
+/// expressed in world-space meters, and penetration depth is measured in
+/// meters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Contact {
     body_a: BodyHandle,
@@ -101,12 +101,12 @@ impl Contact {
         }
     }
 
-    /// Returns the dynamic sphere body handle.
+    /// Returns the first body handle.
     pub fn body_a(self) -> BodyHandle {
         self.body_a
     }
 
-    /// Returns the static plane body handle.
+    /// Returns the second body handle.
     pub fn body_b(self) -> BodyHandle {
         self.body_b
     }
@@ -116,7 +116,7 @@ impl Contact {
         self.point
     }
 
-    /// Returns the normalized contact normal from the plane toward the sphere.
+    /// Returns the normalized contact normal from `body_b` toward `body_a`.
     pub fn normal(self) -> Vec3 {
         self.normal
     }
@@ -156,14 +156,60 @@ pub(crate) fn sphere_plane_contact(
     })
 }
 
-pub(crate) fn resolve_static_contact(body: &mut RigidBody, contact: Contact, restitution: f32) {
-    body.set_position(body.position() + contact.normal() * contact.penetration());
+pub(crate) fn sphere_sphere_contact(
+    body_a: &RigidBody,
+    sphere_a: Sphere,
+    body_b: &RigidBody,
+    sphere_b: Sphere,
+) -> Option<ContactGeometry> {
+    let center_delta = body_a.position() - body_b.position();
+    let radius_sum = sphere_a.radius() + sphere_b.radius();
+    let distance_squared = center_delta.length_squared();
 
-    let normal_velocity = body.velocity().dot(contact.normal());
+    if distance_squared > radius_sum * radius_sum {
+        return None;
+    }
+
+    let (normal, distance) = if distance_squared > f32::EPSILON {
+        let distance = distance_squared.sqrt();
+        (center_delta / distance, distance)
+    } else {
+        let fallback = body_b.velocity() - body_a.velocity();
+        (fallback.try_normalize().unwrap_or(Vec3::X), 0.0)
+    };
+
+    let point_a = body_a.position() - normal * sphere_a.radius();
+    let point_b = body_b.position() + normal * sphere_b.radius();
+
+    Some(ContactGeometry {
+        point: (point_a + point_b) * 0.5,
+        normal,
+        penetration: radius_sum - distance,
+    })
+}
+
+pub(crate) fn resolve_contact(
+    body_a: &mut RigidBody,
+    body_b: &mut RigidBody,
+    contact: Contact,
+    restitution: f32,
+) {
+    let inverse_mass_sum = body_a.inverse_mass() + body_b.inverse_mass();
+    if inverse_mass_sum == 0.0 {
+        return;
+    }
+
+    let correction = contact.normal() * (contact.penetration() / inverse_mass_sum);
+    body_a.set_position(body_a.position() + correction * body_a.inverse_mass());
+    body_b.set_position(body_b.position() - correction * body_b.inverse_mass());
+
+    let relative_velocity = body_a.velocity() - body_b.velocity();
+    let normal_velocity = relative_velocity.dot(contact.normal());
     if normal_velocity < 0.0 {
-        body.set_velocity(
-            body.velocity() - contact.normal() * ((1.0 + restitution) * normal_velocity),
-        );
+        let impulse_magnitude = -(1.0 + restitution) * normal_velocity / inverse_mass_sum;
+        let impulse = contact.normal() * impulse_magnitude;
+        body_a.set_velocity(body_a.velocity() + impulse * body_a.inverse_mass());
+        body_b.set_velocity(body_b.velocity() - impulse * body_b.inverse_mass());
     }
 }
 

@@ -4,6 +4,7 @@ use physics_core::{BodyHandle, PhysicsWorld, Plane, RigidBody, Sphere, Vec3};
 pub struct SphereConfig {
     pub position: [f32; 2],
     pub velocity: [f32; 2],
+    pub angular_velocity: f32,
     pub mass: f32,
     pub radius: f32,
     pub restitution: f32,
@@ -14,6 +15,7 @@ impl Default for SphereConfig {
         Self {
             position: [0.0, 5.0],
             velocity: [0.0, 0.0],
+            angular_velocity: 1.0,
             mass: 1.0,
             radius: 0.5,
             restitution: 0.75,
@@ -40,6 +42,7 @@ impl Default for SceneConfig {
         let sphere_a = SphereConfig {
             position: [-3.0, 2.0],
             velocity: [2.0, 0.0],
+            angular_velocity: 1.0,
             mass: 1.0,
             radius: 0.5,
             restitution: 0.9,
@@ -47,6 +50,7 @@ impl Default for SceneConfig {
         let sphere_b = SphereConfig {
             position: [3.0, 2.0],
             velocity: [-1.0, 0.0],
+            angular_velocity: -0.5,
             mass: 2.0,
             radius: 0.5,
             restitution: 0.9,
@@ -90,9 +94,12 @@ impl Simulation {
         for (index, sphere) in config.spheres.iter().enumerate() {
             let position = Vec3::new(sphere.position[0], sphere.position[1], 0.0);
             let velocity = Vec3::new(sphere.velocity[0], sphere.velocity[1], 0.0);
-            if !position.is_finite() || !velocity.is_finite() {
+            if !position.is_finite()
+                || !velocity.is_finite()
+                || !sphere.angular_velocity.is_finite()
+            {
                 return Err(format!(
-                    "sphere {} position and velocity must be finite",
+                    "sphere {} position and velocities must be finite",
                     index + 1
                 ));
             }
@@ -102,6 +109,10 @@ impl Simulation {
             let mut body = RigidBody::new(position, velocity, sphere.mass)
                 .map_err(|error| format!("sphere {}: {error}", index + 1))?
                 .with_collision_shape(shape);
+            let sphere_inertia = Vec3::splat(0.4 * sphere.mass * sphere.radius * sphere.radius);
+            body.set_inertia(sphere_inertia)
+                .map_err(|error| format!("sphere {}: {error}", index + 1))?;
+            body.set_angular_velocity(Vec3::Z * sphere.angular_velocity);
             body.set_restitution(sphere.restitution)
                 .map_err(|error| format!("sphere {}: {error}", index + 1))?;
             sphere_handles.push(world.add_body(body));
@@ -215,11 +226,15 @@ mod tests {
         let mut sphere_a = RigidBody::new(Vec3::new(-3.0, 2.0, 0.0), Vec3::new(2.0, 0.0, 0.0), 1.0)
             .unwrap()
             .with_collision_shape(Sphere::new(0.5).unwrap());
+        sphere_a.set_inertia(Vec3::splat(0.1)).unwrap();
+        sphere_a.set_angular_velocity(Vec3::Z);
         sphere_a.set_restitution(0.9).unwrap();
         let sphere_a_handle = headless_world.add_body(sphere_a);
         let mut sphere_b = RigidBody::new(Vec3::new(3.0, 2.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), 2.0)
             .unwrap()
             .with_collision_shape(Sphere::new(0.5).unwrap());
+        sphere_b.set_inertia(Vec3::splat(0.2)).unwrap();
+        sphere_b.set_angular_velocity(Vec3::NEG_Z * 0.5);
         sphere_b.set_restitution(0.9).unwrap();
         let sphere_b_handle = headless_world.add_body(sphere_b);
 
@@ -236,6 +251,13 @@ mod tests {
             let headless_body = headless_world.body(headless_handle).unwrap();
             assert!((gui_body.position() - headless_body.position()).length() <= TOLERANCE);
             assert!((gui_body.velocity() - headless_body.velocity()).length() <= TOLERANCE);
+            assert!(
+                gui_body
+                    .orientation()
+                    .dot(headless_body.orientation())
+                    .abs()
+                    >= 1.0 - TOLERANCE
+            );
         }
         assert!((gui_simulation.elapsed() - 3.0).abs() <= TOLERANCE);
     }
@@ -258,6 +280,7 @@ mod tests {
                 SphereConfig {
                     position: [3.75, 1.0],
                     velocity: [1.0, 0.0],
+                    angular_velocity: 0.0,
                     mass: 1.0,
                     radius: 0.5,
                     restitution: 1.0,
@@ -265,6 +288,7 @@ mod tests {
                 SphereConfig {
                     position: [0.0, 5.75],
                     velocity: [0.0, 1.0],
+                    angular_velocity: 0.0,
                     mass: 1.0,
                     radius: 0.5,
                     restitution: 1.0,

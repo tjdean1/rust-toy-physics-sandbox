@@ -86,9 +86,9 @@ impl PhysicsWorld {
     /// static planes and other spheres using positional correction and a
     /// frictionless normal impulse.
     ///
-    /// Zero is accepted as a no-time step and still clears accumulated forces.
-    /// Negative, infinite, and NaN timesteps are rejected without changing the
-    /// world.
+    /// Zero is accepted as a no-time step and still clears accumulated forces
+    /// and torques. Negative, infinite, and NaN timesteps are rejected without
+    /// changing the world.
     pub fn step(&mut self, dt: f32) -> Result<(), InvalidTimestep> {
         if !dt.is_finite() || dt < 0.0 {
             return Err(InvalidTimestep { dt });

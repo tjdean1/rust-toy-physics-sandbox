@@ -1,56 +1,38 @@
-use physics_core::{PhysicsWorld, RigidBody, Sphere, Vec3};
+use physics_core::{PhysicsWorld, RigidBody, Vec3};
 
 fn main() {
     let mut world = PhysicsWorld::with_gravity(Vec3::ZERO);
+    let mut body = RigidBody::new(Vec3::ZERO, Vec3::ZERO, 2.0).expect("mass is valid");
+    body.set_inertia(Vec3::splat(2.0))
+        .expect("inertia is valid");
+    let handle = world.add_body(body);
 
-    let mut sphere_a = RigidBody::new(Vec3::new(-3.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 0.0), 1.0)
-        .expect("sphere A has a valid mass")
-        .with_collision_shape(Sphere::new(0.5).expect("sphere A radius is valid"));
-    sphere_a
-        .set_restitution(0.9)
-        .expect("sphere A restitution is valid");
-    let sphere_a_handle = world.add_body(sphere_a);
-
-    let mut sphere_b = RigidBody::new(Vec3::new(3.0, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), 2.0)
-        .expect("sphere B has a valid mass")
-        .with_collision_shape(Sphere::new(0.5).expect("sphere B radius is valid"));
-    sphere_b
-        .set_restitution(0.9)
-        .expect("sphere B restitution is valid");
-    let sphere_b_handle = world.add_body(sphere_b);
-
+    let force = Vec3::new(0.0, 10.0, 0.0);
     let dt = 1.0 / 60.0;
-    let step_count = 180;
+    let step_count = 60;
 
-    println!("Head-on sphere collision with restitution 0.9");
-    println!("sphere A: 1 kg at x=-3 m, vx=2 m/s");
-    println!("sphere B: 2 kg at x= 3 m, vx=-1 m/s");
-    println!("time (s) | A x (m) | A vx (m/s) | B x (m) | B vx (m/s) | contact");
+    println!("10 N applied 1 m right of a 2 kg body's center for 1 second");
+    println!("time (s) | y (m) | vy (m/s) | wz (rad/s) | local x axis");
 
     for step in 0..=step_count {
-        if step % 15 == 0 || !world.contacts().is_empty() {
-            let sphere_a = world
-                .body(sphere_a_handle)
-                .expect("sphere A handle remains valid");
-            let sphere_b = world
-                .body(sphere_b_handle)
-                .expect("sphere B handle remains valid");
+        let body = world.body(handle).expect("body handle remains valid");
+        if step % 15 == 0 {
+            let local_x = body.orientation() * Vec3::X;
             println!(
-                "{:>8.2} | {:>7.3} | {:>10.3} | {:>7.3} | {:>10.3} | {}",
+                "{:>8.2} | {:>5.3} | {:>8.3} | {:>10.3} | ({:>6.3}, {:>6.3})",
                 step as f32 * dt,
-                sphere_a.position().x,
-                sphere_a.velocity().x,
-                sphere_b.position().x,
-                sphere_b.velocity().x,
-                if world.contacts().is_empty() {
-                    ""
-                } else {
-                    "sphere-sphere"
-                },
+                body.position().y,
+                body.velocity().y,
+                body.angular_velocity().z,
+                local_x.x,
+                local_x.y,
             );
         }
 
         if step < step_count {
+            let body = world.body_mut(handle).expect("body handle remains valid");
+            let application_point = body.center_of_mass() + Vec3::X;
+            body.apply_force_at_point(force, application_point);
             world.step(dt).expect("fixed timestep is valid");
         }
     }

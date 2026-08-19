@@ -3,7 +3,7 @@ mod simulation;
 use std::time::Instant;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
-use physics_core::CollisionShape;
+use physics_core::{CollisionShape, Vec3};
 use simulation::{SceneConfig, Simulation, SphereConfig};
 
 const MAX_STEPS_PER_FRAME: usize = 16;
@@ -139,7 +139,7 @@ impl SandboxApp {
             .default_size(330.0)
             .show(root_ui, |ui| {
                 ui.heading("rust-physics");
-                ui.label("Milestone 0.3 · Sphere-to-Sphere Collisions");
+                ui.label("Milestone 1.0 · Rigid-Body Rotation");
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
@@ -239,6 +239,13 @@ impl SandboxApp {
                                 drag_row(ui, "Position Y", &mut sphere.position[1], 0.1, " m");
                                 drag_row(ui, "Velocity X", &mut sphere.velocity[0], 0.1, " m/s");
                                 drag_row(ui, "Velocity Y", &mut sphere.velocity[1], 0.1, " m/s");
+                                drag_row(
+                                    ui,
+                                    "Angular velocity",
+                                    &mut sphere.angular_velocity,
+                                    0.1,
+                                    " rad/s",
+                                );
                                 positive_row(ui, "Mass", &mut sphere.mass, 0.1, " kg");
                                 positive_row(ui, "Radius", &mut sphere.radius, 0.05, " m");
                                 ui.label("Restitution");
@@ -298,11 +305,12 @@ impl SandboxApp {
                         && let Some(body) = self.simulation.world().body(handle)
                     {
                         ui.monospace(format!(
-                            "position  ({:>8.3}, {:>8.3}) m\nvelocity  ({:>8.3}, {:>8.3}) m/s",
+                            "position  ({:>8.3}, {:>8.3}) m\nvelocity  ({:>8.3}, {:>8.3}) m/s\nangular velocity  {:>8.3} rad/s",
                             body.position().x,
                             body.position().y,
                             body.velocity().x,
                             body.velocity().y,
+                            body.angular_velocity().z,
                         ));
                     } else {
                         ui.weak("No corresponding runtime sphere. Press Reset.");
@@ -421,6 +429,10 @@ impl SandboxApp {
                 Color32::from_rgb(100, 125, 170)
             };
             painter.circle(center, radius, fill, Stroke::new(2.0, Color32::WHITE));
+
+            let local_x = body.orientation() * Vec3::X;
+            let orientation_tip = center + Vec2::new(local_x.x, -local_x.y) * radius;
+            painter.line_segment([center, orientation_tip], Stroke::new(2.0, Color32::WHITE));
 
             let velocity = body.velocity();
             let velocity_tip =

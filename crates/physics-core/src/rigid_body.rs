@@ -1,21 +1,26 @@
 use std::{error::Error, fmt};
 
-use glam::Vec3;
+use glam::{Mat3, Quat, Vec3};
 
 use crate::CollisionShape;
 
-/// A rigid body's translational state.
+/// A rigid body's translational and rotational state.
 ///
-/// Position is measured in meters, velocity in meters per second, mass in
-/// kilograms, and accumulated force in Newtons. Rotation is intentionally not
-/// part of the current model.
+/// `position` is the center of mass in meters. Linear velocity uses meters per
+/// second, angular velocity uses radians per second, force uses Newtons, and
+/// torque uses Newton-meters.
 #[derive(Clone, Debug)]
 pub struct RigidBody {
     position: Vec3,
     velocity: Vec3,
     accumulated_force: Vec3,
+    orientation: Quat,
+    angular_velocity: Vec3,
+    accumulated_torque: Vec3,
     mass: f32,
     inverse_mass: f32,
+    inertia: Vec3,
+    inverse_inertia: Vec3,
     collision_shape: Option<CollisionShape>,
     restitution: f32,
 }
@@ -31,8 +36,13 @@ impl RigidBody {
             position,
             velocity,
             accumulated_force: Vec3::ZERO,
+            orientation: Quat::IDENTITY,
+            angular_velocity: Vec3::ZERO,
+            accumulated_torque: Vec3::ZERO,
             mass,
             inverse_mass: mass.recip(),
+            inertia: Vec3::splat(mass),
+            inverse_inertia: Vec3::splat(mass.recip()),
             collision_shape: None,
             restitution: 0.0,
         })
@@ -40,15 +50,20 @@ impl RigidBody {
 
     /// Creates an immovable body at `position`.
     ///
-    /// Static bodies have infinite mass and zero inverse mass. Forces applied
-    /// to them are discarded on the next world step without changing motion.
+    /// Static bodies have infinite mass and inertia with zero inverses. Forces
+    /// and torques are discarded on the next step without changing motion.
     pub fn static_body(position: Vec3) -> Self {
         Self {
             position,
             velocity: Vec3::ZERO,
             accumulated_force: Vec3::ZERO,
+            orientation: Quat::IDENTITY,
+            angular_velocity: Vec3::ZERO,
+            accumulated_torque: Vec3::ZERO,
             mass: f32::INFINITY,
             inverse_mass: 0.0,
+            inertia: Vec3::INFINITY,
+            inverse_inertia: Vec3::ZERO,
             collision_shape: None,
             restitution: 0.0,
         }
@@ -57,6 +72,42 @@ impl RigidBody {
     /// Adds a force in Newtons to this step's force accumulator.
     pub fn apply_force(&mut self, force: Vec3) {
         self.accumulated_force += force;
+    }
+
+    /// Adds a torque in Newton-meters to this step's torque accumulator.
+    pub fn apply_torque(&mut self, torque: Vec3) {
+        self.accumulated_torque += torque;
+    }
+
+    /// Applies a force at a world-space point.
+    ///
+    /// The force contributes to linear motion and produces torque about the
+    /// center of mass using `lever_arm x force`.
+    pub fn apply_force_at_point(&mut self, force: Vec3, point: Vec3) {
+        self.apply_force(force);
+        self.apply_torque((point - self.center_of_mass()).cross(force));
+    }
+
+    /// Sets the diagonal moment of inertia in local body space, in kg*m^2.
+    ///
+    /// Dynamic bodies default to an isotropic inertia equal to their mass.
+    /// Geometry-specific callers should replace that approximation.
+    pub fn set_inertia(&mut self, inertia: Vec3) -> Result<(), InvalidInertia> {
+        if self.is_static() || !inertia.is_finite() || inertia.cmple(Vec3::ZERO).any() {
+            return Err(InvalidInertia {
+                inertia,
+                static_body: self.is_static(),
+            });
+        }
+
+        self.inertia = inertia;
+        self.inverse_inertia = inertia.recip();
+        Ok(())
+    }
+
+    /// Sets angular velocity in radians per second around world-space axes.
+    pub fn set_angular_velocity(&mut self, angular_velocity: Vec3) {
+        self.angular_velocity = angular_velocity;
     }
 
     /// Attaches a collision shape centered or anchored at the body's position.
@@ -94,8 +145,13 @@ impl RigidBody {
         self.restitution
     }
 
-    /// Returns the position in meters.
+    /// Returns the center-of-mass position in meters.
     pub fn position(&self) -> Vec3 {
+        self.position
+    }
+
+    /// Returns the center-of-mass position in meters.
+    pub fn center_of_mass(&self) -> Vec3 {
         self.position
     }
 
@@ -109,6 +165,21 @@ impl RigidBody {
         self.accumulated_force
     }
 
+    /// Returns the local-to-world orientation.
+    pub fn orientation(&self) -> Quat {
+        self.orientation
+    }
+
+    /// Returns angular velocity in radians per second around world-space axes.
+    pub fn angular_velocity(&self) -> Vec3 {
+        self.angular_velocity
+    }
+
+    /// Returns the accumulated torque in Newton-meters.
+    pub fn accumulated_torque(&self) -> Vec3 {
+        self.accumulated_torque
+    }
+
     /// Returns the mass in kilograms, or positive infinity for a static body.
     pub fn mass(&self) -> f32 {
         self.mass
@@ -117,6 +188,27 @@ impl RigidBody {
     /// Returns the inverse mass in inverse kilograms.
     pub fn inverse_mass(&self) -> f32 {
         self.inverse_mass
+    }
+
+    /// Returns the diagonal moment of inertia in local body space, in kg*m^2.
+    pub fn inertia(&self) -> Vec3 {
+        self.inertia
+    }
+
+    /// Returns the diagonal inverse inertia in local body space.
+    pub fn inverse_inertia(&self) -> Vec3 {
+        self.inverse_inertia
+    }
+
+    /// Returns the inverse inertia tensor rotated into world space.
+    pub fn world_inverse_inertia(&self) -> Mat3 {
+        let rotation = Mat3::from_quat(self.orientation);
+        rotation * Mat3::from_diagonal(self.inverse_inertia) * rotation.transpose()
+    }
+
+    /// Returns angular acceleration from the currently accumulated torque.
+    pub fn angular_acceleration(&self) -> Vec3 {
+        self.world_inverse_inertia() * self.accumulated_torque
     }
 
     /// Returns whether this body is immovable.
@@ -132,8 +224,16 @@ impl RigidBody {
         self.velocity = velocity;
     }
 
+    pub(crate) fn set_orientation(&mut self, orientation: Quat) {
+        self.orientation = orientation.normalize();
+    }
+
     pub(crate) fn clear_forces(&mut self) {
         self.accumulated_force = Vec3::ZERO;
+    }
+
+    pub(crate) fn clear_torques(&mut self) {
+        self.accumulated_torque = Vec3::ZERO;
     }
 }
 
@@ -161,6 +261,36 @@ impl fmt::Display for InvalidMass {
 }
 
 impl Error for InvalidMass {}
+
+/// Error returned for non-positive inertia or when changing a static body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InvalidInertia {
+    inertia: Vec3,
+    static_body: bool,
+}
+
+impl InvalidInertia {
+    /// Returns the rejected diagonal inertia.
+    pub fn value(self) -> Vec3 {
+        self.inertia
+    }
+}
+
+impl fmt::Display for InvalidInertia {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.static_body {
+            return write!(formatter, "cannot set inertia on a static body");
+        }
+
+        write!(
+            formatter,
+            "inertia must be finite and greater than zero on every axis, got {}",
+            self.inertia
+        )
+    }
+}
+
+impl Error for InvalidInertia {}
 
 /// Error returned when a body is given an invalid coefficient of restitution.
 #[derive(Clone, Copy, Debug, PartialEq)]

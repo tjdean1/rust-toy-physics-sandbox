@@ -9,7 +9,7 @@ the simulation.
 
 ## Current status
 
-The project currently includes the work completed through Milestone 0.3:
+The project currently includes the work completed through Milestone 1.0:
 
 | Milestone | Capability | Status |
 | --- | --- | --- |
@@ -17,14 +17,18 @@ The project currently includes the work completed through Milestone 0.3:
 | 0.2 | Sphere shapes, static planes, contacts, and bouncing | Complete |
 | 0.2.1 | Interactive desktop sandbox with a 2D projection | Complete |
 | 0.3 | Sphere-to-sphere collision and impulse response | Complete |
-| 1.0 | Rigid-body rotation | Next |
+| 1.0 | Quaternion orientation, torque, and rotational integration | Complete |
+| 1.1 | Box colliders and rotational collision response | Next |
 
 ### Physics engine
 
-- Three-dimensional position and velocity using `glam::Vec3`
+- Three-dimensional linear and angular motion using `glam`
 - Validated mass and inverse mass
+- Quaternion orientation and angular velocity
+- Per-step torque accumulation and force application at a point
+- Local diagonal inertia and world-space inverse-inertia tensors
 - Static bodies represented by zero inverse mass
-- Per-step force accumulation and clearing
+- Per-step force and torque accumulation and clearing
 - Configurable gravity with an Earth-like default of `(0, -9.81, 0)` m/s²
 - Semi-implicit Euler integration using timesteps in seconds
 - Validated sphere and infinite-plane collision shapes
@@ -42,11 +46,11 @@ The project currently includes the work completed through Milestone 0.3:
 - Add and remove spheres
 - Independently enable a ground, side walls, and ceiling
 - Configure wall half-width, ceiling distance, and boundary restitution
-- Edit position, velocity, mass, radius, restitution, gravity, and ground height
+- Edit position, velocity, angular velocity, mass, radius, restitution, and gravity
 - Configure the fixed simulation timestep
 - Play, pause, single-step, and reset the simulation
-- Inspect simulation time and selected-body position and velocity
-- View velocity arrows, contact points, and contact normals
+- Inspect linear and angular runtime state
+- View velocity arrows, orientation markers, contact points, and contact normals
 - Pan by dragging the viewport and zoom with the scroll wheel
 
 The GUI is a development tool layered on top of `physics-core`; none of its
@@ -73,9 +77,9 @@ cargo run -p gui-sandbox
 ```
 
 The first GUI build takes longer because Cargo must compile the native windowing
-stack. The default scene demonstrates two spheres of different masses colliding
-head-on. Edit scene values in the left panel and press **Reset** to apply them,
-then press **Play** or **Single Step**.
+stack. The default scene demonstrates two rotating spheres colliding head-on.
+Edit scene values in the left panel and press **Reset** to apply them, then press
+**Play** or **Single Step**.
 
 ### Command-line sandbox
 
@@ -83,8 +87,8 @@ then press **Play** or **Single Step**.
 cargo run -p sandbox
 ```
 
-This runs a fixed-timestep head-on collision between two spheres and prints
-their positions, velocities, and contact event. It requires no desktop GUI.
+This applies a continuous off-center force for one second and prints the body's
+linear and angular motion. It requires no desktop GUI.
 
 ### Tests
 
@@ -93,11 +97,10 @@ cargo test
 ```
 
 The test suite covers fundamental motion, gravity, mass-independent
-gravitational acceleration, forces, static bodies, invalid inputs, collision
-shape validation, sphere-plane and sphere-sphere contact geometry, penetration
-correction, restitution, momentum and energy conservation, coincident centers,
-and agreement between GUI-configured and directly constructed headless
-simulations.
+gravitational acceleration, forces, torque, inertia, static bodies, invalid
+inputs, quaternion normalization, force-at-point behavior, collision geometry,
+penetration correction, restitution, momentum and energy conservation, and
+agreement between GUI-configured and directly constructed headless simulations.
 
 ## Using `physics-core`
 
@@ -116,6 +119,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         1.0,
     )?
     .with_collision_shape(Sphere::new(0.5)?);
+    ball.set_inertia(Vec3::splat(0.1))?; // Solid sphere: 2/5 mr².
+    ball.apply_force_at_point(Vec3::X * 4.0, Vec3::new(0.0, 5.5, 0.0));
     ball.set_restitution(0.75)?;
     let ball_handle = world.add_body(ball);
 
@@ -144,17 +149,21 @@ The engine uses SI units wherever practical:
 | --- | --- |
 | Position | meters |
 | Velocity | meters per second |
+| Angular velocity | radians per second |
 | Acceleration | meters per second² |
 | Force | Newtons |
+| Torque | Newton-meters |
 | Mass | kilograms |
+| Moment of inertia | kilogram-meters² |
 | Timestep | seconds |
 
 Each successful world step currently performs these operations:
 
 1. Apply gravity to dynamic bodies as a force proportional to mass.
-2. Compute acceleration from accumulated force and inverse mass.
-3. Update velocity, then position, using semi-implicit Euler integration.
-4. Clear accumulated forces.
+2. Compute linear and angular acceleration from accumulated force, torque, and
+   inverse mass/inertia.
+3. Update linear and angular velocity, then position and quaternion orientation.
+4. Clear accumulated forces and torques.
 5. Detect sphere-plane and sphere-sphere contacts.
 6. Correct penetration and resolve incoming relative normal velocity.
 
@@ -201,8 +210,9 @@ ignored by Git. Cargo recreates it locally whenever the project is built.
 
 The following systems have not been implemented yet:
 
-- Rotation, angular velocity, and torque
 - Box collision shapes
+- Rotational collision response
+- Gyroscopic torque and non-diagonal local inertia
 - Friction and stable contact solving
 - Constraints and joints
 - Broad-phase collision acceleration
@@ -210,6 +220,5 @@ The following systems have not been implemented yet:
 - Built-in 3D rendering
 - ECS integration
 
-The next planned milestone is **1.0: Rotation**, extending bodies with
-orientation, angular velocity, torque, moment of inertia, and rotational
-integration.
+The next planned milestone is **1.1: Box Colliders**, adding box geometry,
+box contacts, and rotational collision response.

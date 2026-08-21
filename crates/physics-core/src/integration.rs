@@ -19,7 +19,8 @@ pub(crate) fn semi_implicit_euler(body: &mut RigidBody, dt: f32) {
     body.set_velocity(velocity);
     body.set_angular_velocity(angular_velocity);
     body.set_position(position);
-    body.set_orientation(orientation);
+    body.set_orientation(orientation)
+        .expect("integrated orientation remains finite and non-zero");
     body.clear_forces();
     body.clear_torques();
 }

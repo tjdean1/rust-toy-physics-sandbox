@@ -9,7 +9,7 @@ the simulation.
 
 ## Current status
 
-The project currently includes the work completed through Milestone 1.0:
+The project currently includes the work completed through Milestone 1.1:
 
 | Milestone | Capability | Status |
 | --- | --- | --- |
@@ -18,7 +18,8 @@ The project currently includes the work completed through Milestone 1.0:
 | 0.2.1 | Interactive desktop sandbox with a 2D projection | Complete |
 | 0.3 | Sphere-to-sphere collision and impulse response | Complete |
 | 1.0 | Quaternion orientation, torque, and rotational integration | Complete |
-| 1.1 | Box colliders and rotational collision response | Next |
+| 1.1 | Box colliders and rotational collision response | Complete |
+| 1.2 | Friction and improved contact resolution | Next |
 
 ### Physics engine
 
@@ -31,22 +32,22 @@ The project currently includes the work completed through Milestone 1.0:
 - Per-step force and torque accumulation and clearing
 - Configurable gravity with an Earth-like default of `(0, -9.81, 0)` m/s²
 - Semi-implicit Euler integration using timesteps in seconds
-- Validated sphere and infinite-plane collision shapes
-- Dynamic-sphere versus static-plane contact detection
-- Dynamic-sphere collisions with dynamic or static spheres
+- Validated sphere, box, and infinite-plane collision shapes
+- Axis-aligned and oriented boxes using body orientation
+- Sphere-plane, sphere-sphere, box-plane, sphere-box, and box-box contacts
 - Contact point, normal, penetration depth, and body handles
 - Positional penetration correction
-- Frictionless restitution-based collision response
-- Inverse-mass-weighted impulses and penetration correction
+- Frictionless restitution-based linear and angular impulse response
+- Inverse-mass/inertia-weighted impulses and penetration correction
 - Rejection of invalid mass, restitution, shape, and timestep values
 
 ### Interactive sandbox
 
 - X/Y projection of the 3D simulation with a world-space grid
-- Add and remove spheres
+- Add and remove spheres and boxes
 - Independently enable a ground, side walls, and ceiling
 - Configure wall half-width, ceiling distance, and boundary restitution
-- Edit position, velocity, angular velocity, mass, radius, restitution, and gravity
+- Edit box angle and half-extents plus linear and angular body state
 - Configure the fixed simulation timestep
 - Play, pause, single-step, and reset the simulation
 - Inspect linear and angular runtime state
@@ -77,9 +78,9 @@ cargo run -p gui-sandbox
 ```
 
 The first GUI build takes longer because Cargo must compile the native windowing
-stack. The default scene demonstrates two rotating spheres colliding head-on.
-Edit scene values in the left panel and press **Reset** to apply them, then press
-**Play** or **Single Step**.
+stack. The default scene includes falling oriented boxes, a sphere, ground, and
+side walls. Edit scene values in the left panel and press **Reset** to apply
+them, then press **Play** or **Single Step**.
 
 ### Command-line sandbox
 
@@ -87,8 +88,8 @@ Edit scene values in the left panel and press **Reset** to apply them, then pres
 cargo run -p sandbox
 ```
 
-This applies a continuous off-center force for one second and prints the body's
-linear and angular motion. It requires no desktop GUI.
+This drops a tilted box onto a static plane and prints its translation,
+orientation, angular velocity, and contacts. It requires no desktop GUI.
 
 ### Tests
 
@@ -98,9 +99,9 @@ cargo test
 
 The test suite covers fundamental motion, gravity, mass-independent
 gravitational acceleration, forces, torque, inertia, static bodies, invalid
-inputs, quaternion normalization, force-at-point behavior, collision geometry,
-penetration correction, restitution, momentum and energy conservation, and
-agreement between GUI-configured and directly constructed headless simulations.
+inputs, quaternion normalization, force-at-point behavior, sphere and box
+collision geometry, rotational collision response, penetration correction,
+momentum and energy conservation, and GUI/headless agreement.
 
 ## Using `physics-core`
 
@@ -108,21 +109,18 @@ Both sandboxes use the same public physics API. A minimal simulation looks like
 this:
 
 ```rust
-use physics_core::{PhysicsWorld, Plane, RigidBody, Sphere, Vec3};
+use physics_core::{BoxCollider, PhysicsWorld, Plane, Quat, RigidBody, Vec3};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut world = PhysicsWorld::new();
 
-    let mut ball = RigidBody::new(
-        Vec3::new(0.0, 5.0, 0.0),
-        Vec3::ZERO,
-        1.0,
-    )?
-    .with_collision_shape(Sphere::new(0.5)?);
-    ball.set_inertia(Vec3::splat(0.1))?; // Solid sphere: 2/5 mr².
-    ball.apply_force_at_point(Vec3::X * 4.0, Vec3::new(0.0, 5.5, 0.0));
-    ball.set_restitution(0.75)?;
-    let ball_handle = world.add_body(ball);
+    let shape = BoxCollider::new(Vec3::new(0.75, 0.5, 0.5))?;
+    let mut body = RigidBody::new(Vec3::new(0.0, 5.0, 0.0), Vec3::ZERO, 1.0)?
+        .with_collision_shape(shape);
+    body.set_orientation(Quat::from_rotation_z(0.35))?;
+    body.set_inertia(shape.solid_inertia(body.mass()))?;
+    body.set_restitution(0.5)?;
+    let body_handle = world.add_body(body);
 
     let mut ground = RigidBody::static_body(Vec3::ZERO)
         .with_collision_shape(Plane::new(Vec3::Y)?);
@@ -134,8 +132,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         world.step(dt)?;
     }
 
-    let ball = world.body(ball_handle).expect("body handle remains valid");
-    println!("position: {:?}, velocity: {:?}", ball.position(), ball.velocity());
+    let body = world.body(body_handle).expect("body handle remains valid");
+    println!("position: {:?}, orientation: {:?}", body.position(), body.orientation());
 
     Ok(())
 }
@@ -164,13 +162,13 @@ Each successful world step currently performs these operations:
    inverse mass/inertia.
 3. Update linear and angular velocity, then position and quaternion orientation.
 4. Clear accumulated forces and torques.
-5. Detect sphere-plane and sphere-sphere contacts.
-6. Correct penetration and resolve incoming relative normal velocity.
+5. Detect contacts among spheres, boxes, and static planes.
+6. Correct penetration and resolve contact-point normal velocity.
 
 Collision response is discrete and frictionless. A collision pair uses the
-lower restitution coefficient of its two bodies. Sphere-pair impulses and
-position corrections are weighted by inverse mass, so linear momentum is
-conserved by isolated collision response.
+lower restitution coefficient of its two bodies. Impulses include inverse mass,
+inverse inertia, and contact lever arms, allowing off-center contacts to change
+both linear and angular velocity.
 
 ## Workspace layout
 
@@ -210,15 +208,13 @@ ignored by Git. Cargo recreates it locally whenever the project is built.
 
 The following systems have not been implemented yet:
 
-- Box collision shapes
-- Rotational collision response
 - Gyroscopic torque and non-diagonal local inertia
 - Friction and stable contact solving
+- Multi-point contact manifolds
 - Constraints and joints
 - Broad-phase collision acceleration
 - Continuous collision detection
 - Built-in 3D rendering
 - ECS integration
 
-The next planned milestone is **1.1: Box Colliders**, adding box geometry,
-box contacts, and rotational collision response.
+The next planned milestone is **1.2: Friction & Improved Contact Resolution**.

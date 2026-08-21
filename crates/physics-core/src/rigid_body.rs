@@ -224,8 +224,14 @@ impl RigidBody {
         self.velocity = velocity;
     }
 
-    pub(crate) fn set_orientation(&mut self, orientation: Quat) {
+    /// Sets and normalizes the local-to-world orientation.
+    pub fn set_orientation(&mut self, orientation: Quat) -> Result<(), InvalidOrientation> {
+        if !orientation.is_finite() || orientation.length_squared() <= f32::EPSILON {
+            return Err(InvalidOrientation { orientation });
+        }
+
         self.orientation = orientation.normalize();
+        Ok(())
     }
 
     pub(crate) fn clear_forces(&mut self) {
@@ -291,6 +297,27 @@ impl fmt::Display for InvalidInertia {
 }
 
 impl Error for InvalidInertia {}
+
+/// Error returned when a body is given an invalid orientation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InvalidOrientation {
+    orientation: Quat,
+}
+
+impl InvalidOrientation {
+    /// Returns the rejected orientation.
+    pub fn value(self) -> Quat {
+        self.orientation
+    }
+}
+
+impl fmt::Display for InvalidOrientation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "orientation must be finite and non-zero")
+    }
+}
+
+impl Error for InvalidOrientation {}
 
 /// Error returned when a body is given an invalid coefficient of restitution.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -4,9 +4,15 @@ use std::time::Instant;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use physics_core::{CollisionShape, Vec3};
-use simulation::{SceneConfig, Simulation, SphereConfig};
+use simulation::{BoxConfig, SceneConfig, Simulation, SphereConfig};
 
 const MAX_STEPS_PER_FRAME: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Selection {
+    Sphere(usize),
+    Box(usize),
+}
 
 #[derive(Default)]
 struct AxisBoundaries {
@@ -73,7 +79,7 @@ fn main() -> eframe::Result {
 struct SandboxApp {
     config: SceneConfig,
     simulation: Simulation,
-    selected_sphere: usize,
+    selection: Selection,
     running: bool,
     accumulator: f32,
     last_frame: Instant,
@@ -89,7 +95,7 @@ impl SandboxApp {
         Self {
             config,
             simulation,
-            selected_sphere: 0,
+            selection: Selection::Box(0),
             running: false,
             accumulator: 0.0,
             last_frame: Instant::now(),
@@ -139,7 +145,7 @@ impl SandboxApp {
             .default_size(330.0)
             .show(root_ui, |ui| {
                 ui.heading("rust-physics");
-                ui.label("Milestone 1.0 · Rigid-Body Rotation");
+                ui.label("Milestone 1.1 · Box Colliders");
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
@@ -203,17 +209,37 @@ impl SandboxApp {
                         let mut sphere = SphereConfig::default();
                         sphere.position[0] = self.config.spheres.len() as f32 * 1.25;
                         self.config.spheres.push(sphere);
-                        self.selected_sphere = self.config.spheres.len() - 1;
+                        self.selection = Selection::Sphere(self.config.spheres.len() - 1);
+                        reset_requested = true;
+                    }
+                    if ui.button("+ Box").clicked() {
+                        let mut box_config = BoxConfig::default();
+                        box_config.position[0] = self.config.boxes.len() as f32 * 1.5;
+                        self.config.boxes.push(box_config);
+                        self.selection = Selection::Box(self.config.boxes.len() - 1);
                         reset_requested = true;
                     }
                     if ui
-                        .add_enabled(!self.config.spheres.is_empty(), egui::Button::new("Remove"))
+                        .add_enabled(
+                            !self.config.spheres.is_empty() || !self.config.boxes.is_empty(),
+                            egui::Button::new("Remove"),
+                        )
                         .clicked()
                     {
-                        self.config.spheres.remove(self.selected_sphere);
-                        self.selected_sphere = self
-                            .selected_sphere
-                            .min(self.config.spheres.len().saturating_sub(1));
+                        match self.selection {
+                            Selection::Sphere(index) if index < self.config.spheres.len() => {
+                                self.config.spheres.remove(index);
+                            }
+                            Selection::Box(index) if index < self.config.boxes.len() => {
+                                self.config.boxes.remove(index);
+                            }
+                            _ => {}
+                        }
+                        self.selection = if self.config.boxes.is_empty() {
+                            Selection::Sphere(self.config.spheres.len().saturating_sub(1))
+                        } else {
+                            Selection::Box(self.config.boxes.len().saturating_sub(1))
+                        };
                         reset_requested = true;
                     }
                 });
@@ -221,43 +247,59 @@ impl SandboxApp {
                 ui.horizontal_wrapped(|ui| {
                     for index in 0..self.config.spheres.len() {
                         ui.selectable_value(
-                            &mut self.selected_sphere,
-                            index,
+                            &mut self.selection,
+                            Selection::Sphere(index),
                             format!("Sphere {}", index + 1),
                         );
                     }
+                    for index in 0..self.config.boxes.len() {
+                        ui.selectable_value(
+                            &mut self.selection,
+                            Selection::Box(index),
+                            format!("Box {}", index + 1),
+                        );
+                    }
                 });
-                ui.small("Spheres collide using frictionless, mass-aware impulses.");
+                ui.small("Shapes use frictionless linear and angular impulses.");
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    if let Some(sphere) = self.config.spheres.get_mut(self.selected_sphere) {
-                        ui.add_space(4.0);
-                        egui::Grid::new("sphere_settings")
-                            .num_columns(2)
-                            .show(ui, |ui| {
-                                drag_row(ui, "Position X", &mut sphere.position[0], 0.1, " m");
-                                drag_row(ui, "Position Y", &mut sphere.position[1], 0.1, " m");
-                                drag_row(ui, "Velocity X", &mut sphere.velocity[0], 0.1, " m/s");
-                                drag_row(ui, "Velocity Y", &mut sphere.velocity[1], 0.1, " m/s");
-                                drag_row(
-                                    ui,
-                                    "Angular velocity",
-                                    &mut sphere.angular_velocity,
-                                    0.1,
-                                    " rad/s",
-                                );
-                                positive_row(ui, "Mass", &mut sphere.mass, 0.1, " kg");
-                                positive_row(ui, "Radius", &mut sphere.radius, 0.05, " m");
-                                ui.label("Restitution");
-                                ui.add(
-                                    egui::DragValue::new(&mut sphere.restitution)
-                                        .range(0.0..=1.0)
-                                        .speed(0.01),
-                                );
-                                ui.end_row();
-                            });
-                    } else {
-                        ui.weak("Add a sphere to configure it.");
+                    match self.selection {
+                        Selection::Sphere(index) => {
+                            if let Some(sphere) = self.config.spheres.get_mut(index) {
+                                ui.add_space(4.0);
+                                egui::Grid::new("sphere_settings")
+                                    .num_columns(2)
+                                    .show(ui, |ui| {
+                                        drag_row(ui, "Position X", &mut sphere.position[0], 0.1, " m");
+                                        drag_row(ui, "Position Y", &mut sphere.position[1], 0.1, " m");
+                                        drag_row(ui, "Velocity X", &mut sphere.velocity[0], 0.1, " m/s");
+                                        drag_row(ui, "Velocity Y", &mut sphere.velocity[1], 0.1, " m/s");
+                                        drag_row(ui, "Angular velocity", &mut sphere.angular_velocity, 0.1, " rad/s");
+                                        positive_row(ui, "Mass", &mut sphere.mass, 0.1, " kg");
+                                        positive_row(ui, "Radius", &mut sphere.radius, 0.05, " m");
+                                        restitution_row(ui, &mut sphere.restitution);
+                                    });
+                            }
+                        }
+                        Selection::Box(index) => {
+                            if let Some(box_config) = self.config.boxes.get_mut(index) {
+                                ui.add_space(4.0);
+                                egui::Grid::new("box_settings")
+                                    .num_columns(2)
+                                    .show(ui, |ui| {
+                                        drag_row(ui, "Position X", &mut box_config.position[0], 0.1, " m");
+                                        drag_row(ui, "Position Y", &mut box_config.position[1], 0.1, " m");
+                                        drag_row(ui, "Velocity X", &mut box_config.velocity[0], 0.1, " m/s");
+                                        drag_row(ui, "Velocity Y", &mut box_config.velocity[1], 0.1, " m/s");
+                                        drag_row(ui, "Angle", &mut box_config.angle, 0.05, " rad");
+                                        drag_row(ui, "Angular velocity", &mut box_config.angular_velocity, 0.1, " rad/s");
+                                        positive_row(ui, "Half-width", &mut box_config.half_extents[0], 0.05, " m");
+                                        positive_row(ui, "Half-height", &mut box_config.half_extents[1], 0.05, " m");
+                                        positive_row(ui, "Mass", &mut box_config.mass, 0.1, " kg");
+                                        restitution_row(ui, &mut box_config.restitution);
+                                    });
+                            }
+                        }
                     }
 
                     ui.separator();
@@ -301,7 +343,11 @@ impl SandboxApp {
 
                     ui.separator();
                     ui.strong("Selected runtime state");
-                    if let Some(handle) = self.simulation.sphere_handle(self.selected_sphere)
+                    let selected_handle = match self.selection {
+                        Selection::Sphere(index) => self.simulation.sphere_handle(index),
+                        Selection::Box(index) => self.simulation.box_handle(index),
+                    };
+                    if let Some(handle) = selected_handle
                         && let Some(body) = self.simulation.world().body(handle)
                     {
                         ui.monospace(format!(
@@ -313,7 +359,7 @@ impl SandboxApp {
                             body.angular_velocity().z,
                         ));
                     } else {
-                        ui.weak("No corresponding runtime sphere. Press Reset.");
+                        ui.weak("No corresponding runtime shape. Press Reset.");
                     }
                 });
             });
@@ -423,7 +469,7 @@ impl SandboxApp {
 
             let center = self.world_to_screen(rect, [body.position().x, body.position().y]);
             let radius = shape.radius() * self.pixels_per_meter;
-            let fill = if index == self.selected_sphere {
+            let fill = if self.selection == Selection::Sphere(index) {
                 Color32::from_rgb(90, 170, 245)
             } else {
                 Color32::from_rgb(100, 125, 170)
@@ -446,6 +492,56 @@ impl SandboxApp {
                 center,
                 egui::Align2::CENTER_CENTER,
                 (index + 1).to_string(),
+                egui::FontId::proportional(14.0),
+                Color32::BLACK,
+            );
+        }
+
+        for (index, handle) in (0..self.config.boxes.len()).filter_map(|index| {
+            self.simulation
+                .box_handle(index)
+                .map(|handle| (index, handle))
+        }) {
+            let Some(body) = self.simulation.world().body(handle) else {
+                continue;
+            };
+            let Some(CollisionShape::Box(shape)) = body.collision_shape() else {
+                continue;
+            };
+
+            let half = shape.half_extents();
+            let corners = [
+                Vec3::new(-half.x, -half.y, 0.0),
+                Vec3::new(half.x, -half.y, 0.0),
+                Vec3::new(half.x, half.y, 0.0),
+                Vec3::new(-half.x, half.y, 0.0),
+            ];
+            let points = corners
+                .map(|corner| body.position() + body.orientation() * corner)
+                .map(|point| self.world_to_screen(rect, [point.x, point.y]))
+                .to_vec();
+            let fill = if self.selection == Selection::Box(index) {
+                Color32::from_rgb(235, 145, 75)
+            } else {
+                Color32::from_rgb(170, 105, 70)
+            };
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                fill,
+                Stroke::new(2.0, Color32::WHITE),
+            ));
+
+            let center = self.world_to_screen(rect, [body.position().x, body.position().y]);
+            let velocity = body.velocity();
+            painter.arrow(
+                center,
+                Vec2::new(velocity.x, -velocity.y) * (self.pixels_per_meter * 0.12),
+                Stroke::new(2.0, Color32::YELLOW),
+            );
+            painter.text(
+                center,
+                egui::Align2::CENTER_CENTER,
+                format!("B{}", index + 1),
                 egui::FontId::proportional(14.0),
                 Color32::BLACK,
             );
@@ -530,6 +626,16 @@ fn positive_row(ui: &mut egui::Ui, label: &str, value: &mut f32, speed: f64, suf
             .range(0.001..=f32::MAX)
             .speed(speed)
             .suffix(suffix),
+    );
+    ui.end_row();
+}
+
+fn restitution_row(ui: &mut egui::Ui, restitution: &mut f32) {
+    ui.label("Restitution");
+    ui.add(
+        egui::DragValue::new(restitution)
+            .range(0.0..=1.0)
+            .speed(0.01),
     );
     ui.end_row();
 }

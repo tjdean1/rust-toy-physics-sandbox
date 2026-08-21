@@ -1,4 +1,4 @@
-use physics_core::{BodyHandle, PhysicsWorld, Plane, RigidBody, Sphere, Vec3};
+use physics_core::{BodyHandle, BoxCollider, PhysicsWorld, Plane, Quat, RigidBody, Sphere, Vec3};
 
 #[derive(Clone, Debug)]
 pub struct SphereConfig {
@@ -24,8 +24,34 @@ impl Default for SphereConfig {
 }
 
 #[derive(Clone, Debug)]
+pub struct BoxConfig {
+    pub position: [f32; 2],
+    pub velocity: [f32; 2],
+    pub angle: f32,
+    pub angular_velocity: f32,
+    pub mass: f32,
+    pub half_extents: [f32; 2],
+    pub restitution: f32,
+}
+
+impl Default for BoxConfig {
+    fn default() -> Self {
+        Self {
+            position: [0.0, 5.0],
+            velocity: [0.0, 0.0],
+            angle: 0.35,
+            angular_velocity: 0.0,
+            mass: 1.0,
+            half_extents: [0.75, 0.5],
+            restitution: 0.4,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct SceneConfig {
     pub spheres: Vec<SphereConfig>,
+    pub boxes: Vec<BoxConfig>,
     pub ground_enabled: bool,
     pub ground_height: f32,
     pub side_walls_enabled: bool,
@@ -39,33 +65,33 @@ pub struct SceneConfig {
 
 impl Default for SceneConfig {
     fn default() -> Self {
-        let sphere_a = SphereConfig {
-            position: [-3.0, 2.0],
-            velocity: [2.0, 0.0],
-            angular_velocity: 1.0,
+        let sphere = SphereConfig {
+            position: [-2.0, 4.5],
+            velocity: [1.0, 0.0],
+            angular_velocity: 0.0,
             mass: 1.0,
             radius: 0.5,
-            restitution: 0.9,
+            restitution: 0.5,
         };
-        let sphere_b = SphereConfig {
-            position: [3.0, 2.0],
-            velocity: [-1.0, 0.0],
-            angular_velocity: -0.5,
-            mass: 2.0,
-            radius: 0.5,
-            restitution: 0.9,
+        let box_a = BoxConfig::default();
+        let box_b = BoxConfig {
+            position: [1.4, 2.5],
+            angle: -0.2,
+            half_extents: [0.65, 0.65],
+            ..BoxConfig::default()
         };
 
         Self {
-            spheres: vec![sphere_a, sphere_b],
-            ground_enabled: false,
+            spheres: vec![sphere],
+            boxes: vec![box_a, box_b],
+            ground_enabled: true,
             ground_height: 0.0,
-            side_walls_enabled: false,
+            side_walls_enabled: true,
             wall_distance: 6.0,
             ceiling_enabled: false,
             ceiling_distance: 6.0,
             boundary_restitution: 0.75,
-            gravity: [0.0, 0.0],
+            gravity: [0.0, -9.81],
             fixed_dt: 1.0 / 60.0,
         }
     }
@@ -74,6 +100,7 @@ impl Default for SceneConfig {
 pub struct Simulation {
     world: PhysicsWorld,
     sphere_handles: Vec<BodyHandle>,
+    box_handles: Vec<BodyHandle>,
     elapsed: f32,
 }
 
@@ -109,13 +136,46 @@ impl Simulation {
             let mut body = RigidBody::new(position, velocity, sphere.mass)
                 .map_err(|error| format!("sphere {}: {error}", index + 1))?
                 .with_collision_shape(shape);
-            let sphere_inertia = Vec3::splat(0.4 * sphere.mass * sphere.radius * sphere.radius);
-            body.set_inertia(sphere_inertia)
+            body.set_inertia(shape.solid_inertia(sphere.mass))
                 .map_err(|error| format!("sphere {}: {error}", index + 1))?;
             body.set_angular_velocity(Vec3::Z * sphere.angular_velocity);
             body.set_restitution(sphere.restitution)
                 .map_err(|error| format!("sphere {}: {error}", index + 1))?;
             sphere_handles.push(world.add_body(body));
+        }
+
+        let mut box_handles = Vec::with_capacity(config.boxes.len());
+        for (index, box_config) in config.boxes.iter().enumerate() {
+            let position = Vec3::new(box_config.position[0], box_config.position[1], 0.0);
+            let velocity = Vec3::new(box_config.velocity[0], box_config.velocity[1], 0.0);
+            if !position.is_finite()
+                || !velocity.is_finite()
+                || !box_config.angle.is_finite()
+                || !box_config.angular_velocity.is_finite()
+            {
+                return Err(format!(
+                    "box {} transform and velocities must be finite",
+                    index + 1
+                ));
+            }
+
+            let shape = BoxCollider::new(Vec3::new(
+                box_config.half_extents[0],
+                box_config.half_extents[1],
+                0.5,
+            ))
+            .map_err(|error| format!("box {}: {error}", index + 1))?;
+            let mut body = RigidBody::new(position, velocity, box_config.mass)
+                .map_err(|error| format!("box {}: {error}", index + 1))?
+                .with_collision_shape(shape);
+            body.set_orientation(Quat::from_rotation_z(box_config.angle))
+                .map_err(|error| format!("box {}: {error}", index + 1))?;
+            body.set_angular_velocity(Vec3::Z * box_config.angular_velocity);
+            body.set_inertia(shape.solid_inertia(box_config.mass))
+                .map_err(|error| format!("box {}: {error}", index + 1))?;
+            body.set_restitution(box_config.restitution)
+                .map_err(|error| format!("box {}: {error}", index + 1))?;
+            box_handles.push(world.add_body(body));
         }
 
         if (config.ground_enabled || config.ceiling_enabled) && !config.ground_height.is_finite() {
@@ -170,6 +230,7 @@ impl Simulation {
         Ok(Self {
             world,
             sphere_handles,
+            box_handles,
             elapsed: 0.0,
         })
     }
@@ -187,6 +248,10 @@ impl Simulation {
 
     pub fn sphere_handle(&self, index: usize) -> Option<BodyHandle> {
         self.sphere_handles.get(index).copied()
+    }
+
+    pub fn box_handle(&self, index: usize) -> Option<BodyHandle> {
+        self.box_handles.get(index).copied()
     }
 
     pub fn elapsed(&self) -> f32 {
@@ -219,46 +284,52 @@ mod tests {
 
     #[test]
     fn configured_simulation_matches_direct_headless_world() {
-        let config = SceneConfig::default();
+        let mut config = SceneConfig::default();
+        config.spheres.clear();
+        config.boxes = vec![BoxConfig {
+            position: [1.0, 2.0],
+            velocity: [0.5, -0.25],
+            angle: 0.3,
+            angular_velocity: 0.75,
+            mass: 2.0,
+            half_extents: [1.0, 0.5],
+            restitution: 0.6,
+        }];
+        config.ground_enabled = false;
+        config.side_walls_enabled = false;
+        config.gravity = [0.0, 0.0];
         let mut gui_simulation = Simulation::from_config(&config).unwrap();
 
         let mut headless_world = PhysicsWorld::with_gravity(Vec3::ZERO);
-        let mut sphere_a = RigidBody::new(Vec3::new(-3.0, 2.0, 0.0), Vec3::new(2.0, 0.0, 0.0), 1.0)
+        let shape = BoxCollider::new(Vec3::new(1.0, 0.5, 0.5)).unwrap();
+        let mut body = RigidBody::new(Vec3::new(1.0, 2.0, 0.0), Vec3::new(0.5, -0.25, 0.0), 2.0)
             .unwrap()
-            .with_collision_shape(Sphere::new(0.5).unwrap());
-        sphere_a.set_inertia(Vec3::splat(0.1)).unwrap();
-        sphere_a.set_angular_velocity(Vec3::Z);
-        sphere_a.set_restitution(0.9).unwrap();
-        let sphere_a_handle = headless_world.add_body(sphere_a);
-        let mut sphere_b = RigidBody::new(Vec3::new(3.0, 2.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), 2.0)
-            .unwrap()
-            .with_collision_shape(Sphere::new(0.5).unwrap());
-        sphere_b.set_inertia(Vec3::splat(0.2)).unwrap();
-        sphere_b.set_angular_velocity(Vec3::NEG_Z * 0.5);
-        sphere_b.set_restitution(0.9).unwrap();
-        let sphere_b_handle = headless_world.add_body(sphere_b);
+            .with_collision_shape(shape);
+        body.set_orientation(Quat::from_rotation_z(0.3)).unwrap();
+        body.set_angular_velocity(Vec3::Z * 0.75);
+        body.set_inertia(shape.solid_inertia(2.0)).unwrap();
+        body.set_restitution(0.6).unwrap();
+        let headless_handle = headless_world.add_body(body);
 
         for _ in 0..180 {
             gui_simulation.step(config.fixed_dt);
             headless_world.step(config.fixed_dt).unwrap();
         }
 
-        for (index, headless_handle) in [sphere_a_handle, sphere_b_handle].into_iter().enumerate() {
-            let gui_body = gui_simulation
-                .world()
-                .body(gui_simulation.sphere_handle(index).unwrap())
-                .unwrap();
-            let headless_body = headless_world.body(headless_handle).unwrap();
-            assert!((gui_body.position() - headless_body.position()).length() <= TOLERANCE);
-            assert!((gui_body.velocity() - headless_body.velocity()).length() <= TOLERANCE);
-            assert!(
-                gui_body
-                    .orientation()
-                    .dot(headless_body.orientation())
-                    .abs()
-                    >= 1.0 - TOLERANCE
-            );
-        }
+        let gui_body = gui_simulation
+            .world()
+            .body(gui_simulation.box_handle(0).unwrap())
+            .unwrap();
+        let headless_body = headless_world.body(headless_handle).unwrap();
+        assert!((gui_body.position() - headless_body.position()).length() <= TOLERANCE);
+        assert!((gui_body.velocity() - headless_body.velocity()).length() <= TOLERANCE);
+        assert!(
+            gui_body
+                .orientation()
+                .dot(headless_body.orientation())
+                .abs()
+                >= 1.0 - TOLERANCE
+        );
         assert!((gui_simulation.elapsed() - 3.0).abs() <= TOLERANCE);
     }
 
@@ -269,6 +340,10 @@ mod tests {
         assert!(Simulation::from_config(&config).is_err());
 
         config.spheres[0].mass = 1.0;
+        config.boxes[0].half_extents[0] = 0.0;
+        assert!(Simulation::from_config(&config).is_err());
+
+        config.boxes[0].half_extents[0] = 0.5;
         config.fixed_dt = -1.0;
         assert!(Simulation::from_config(&config).is_err());
     }
@@ -294,6 +369,7 @@ mod tests {
                     restitution: 1.0,
                 },
             ],
+            boxes: Vec::new(),
             ground_enabled: true,
             ground_height: 0.0,
             side_walls_enabled: true,

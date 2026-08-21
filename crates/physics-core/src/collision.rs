@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use glam::Vec3;
 
-use crate::{RigidBody, world::BodyHandle};
+use crate::{BoxCollider, RigidBody, world::BodyHandle};
 
 /// A sphere collision shape with a radius measured in meters.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -23,6 +23,11 @@ impl Sphere {
     /// Returns the sphere radius in meters.
     pub fn radius(self) -> f32 {
         self.radius
+    }
+
+    /// Returns the diagonal inertia of a solid sphere with `mass` kilograms.
+    pub fn solid_inertia(self, mass: f32) -> Vec3 {
+        Vec3::splat(0.4 * mass * self.radius * self.radius)
     }
 }
 
@@ -62,6 +67,8 @@ pub enum CollisionShape {
     Sphere(Sphere),
     /// An infinite plane passing through the body's position.
     Plane(Plane),
+    /// A box centered on and oriented with its body.
+    Box(BoxCollider),
 }
 
 impl From<Sphere> for CollisionShape {
@@ -73,6 +80,12 @@ impl From<Sphere> for CollisionShape {
 impl From<Plane> for CollisionShape {
     fn from(plane: Plane) -> Self {
         Self::Plane(plane)
+    }
+}
+
+impl From<BoxCollider> for CollisionShape {
+    fn from(box_shape: BoxCollider) -> Self {
+        Self::Box(box_shape)
     }
 }
 
@@ -134,6 +147,23 @@ pub(crate) struct ContactGeometry {
     penetration: f32,
 }
 
+impl ContactGeometry {
+    pub(crate) fn new(point: Vec3, normal: Vec3, penetration: f32) -> Self {
+        Self {
+            point,
+            normal,
+            penetration,
+        }
+    }
+
+    pub(crate) fn flipped(self) -> Self {
+        Self {
+            normal: -self.normal,
+            ..self
+        }
+    }
+}
+
 pub(crate) fn sphere_plane_contact(
     sphere_body: &RigidBody,
     sphere: Sphere,
@@ -149,11 +179,11 @@ pub(crate) fn sphere_plane_contact(
         return None;
     }
 
-    Some(ContactGeometry {
-        point: sphere_body.position() - normal * signed_distance,
+    Some(ContactGeometry::new(
+        sphere_body.position() - normal * signed_distance,
         normal,
         penetration,
-    })
+    ))
 }
 
 pub(crate) fn sphere_sphere_contact(
@@ -181,11 +211,11 @@ pub(crate) fn sphere_sphere_contact(
     let point_a = body_a.position() - normal * sphere_a.radius();
     let point_b = body_b.position() + normal * sphere_b.radius();
 
-    Some(ContactGeometry {
-        point: (point_a + point_b) * 0.5,
+    Some(ContactGeometry::new(
+        (point_a + point_b) * 0.5,
         normal,
-        penetration: radius_sum - distance,
-    })
+        radius_sum - distance,
+    ))
 }
 
 pub(crate) fn resolve_contact(
@@ -199,17 +229,32 @@ pub(crate) fn resolve_contact(
         return;
     }
 
+    let radius_a = contact.point() - body_a.position();
+    let radius_b = contact.point() - body_b.position();
     let correction = contact.normal() * (contact.penetration() / inverse_mass_sum);
     body_a.set_position(body_a.position() + correction * body_a.inverse_mass());
     body_b.set_position(body_b.position() - correction * body_b.inverse_mass());
 
-    let relative_velocity = body_a.velocity() - body_b.velocity();
+    let velocity_a = body_a.velocity() + body_a.angular_velocity().cross(radius_a);
+    let velocity_b = body_b.velocity() + body_b.angular_velocity().cross(radius_b);
+    let relative_velocity = velocity_a - velocity_b;
     let normal_velocity = relative_velocity.dot(contact.normal());
     if normal_velocity < 0.0 {
-        let impulse_magnitude = -(1.0 + restitution) * normal_velocity / inverse_mass_sum;
+        let angular_a = body_a.world_inverse_inertia() * radius_a.cross(contact.normal());
+        let angular_b = body_b.world_inverse_inertia() * radius_b.cross(contact.normal());
+        let angular_effect =
+            (angular_a.cross(radius_a) + angular_b.cross(radius_b)).dot(contact.normal());
+        let impulse_magnitude =
+            -(1.0 + restitution) * normal_velocity / (inverse_mass_sum + angular_effect);
         let impulse = contact.normal() * impulse_magnitude;
         body_a.set_velocity(body_a.velocity() + impulse * body_a.inverse_mass());
         body_b.set_velocity(body_b.velocity() - impulse * body_b.inverse_mass());
+        body_a.set_angular_velocity(
+            body_a.angular_velocity() + body_a.world_inverse_inertia() * radius_a.cross(impulse),
+        );
+        body_b.set_angular_velocity(
+            body_b.angular_velocity() - body_b.world_inverse_inertia() * radius_b.cross(impulse),
+        );
     }
 }
 

@@ -1,38 +1,45 @@
-use physics_core::{PhysicsWorld, RigidBody, Vec3};
+use physics_core::{BoxCollider, PhysicsWorld, Plane, Quat, RigidBody, Vec3};
 
 fn main() {
-    let mut world = PhysicsWorld::with_gravity(Vec3::ZERO);
-    let mut body = RigidBody::new(Vec3::ZERO, Vec3::ZERO, 2.0).expect("mass is valid");
-    body.set_inertia(Vec3::splat(2.0))
+    let mut world = PhysicsWorld::new();
+    let shape = BoxCollider::new(Vec3::new(0.75, 0.5, 0.5)).expect("box dimensions are valid");
+    let mut body = RigidBody::new(Vec3::new(0.0, 4.0, 0.0), Vec3::X, 2.0)
+        .expect("mass is valid")
+        .with_collision_shape(shape);
+    body.set_orientation(Quat::from_rotation_z(0.35))
+        .expect("orientation is valid");
+    body.set_inertia(shape.solid_inertia(body.mass()))
         .expect("inertia is valid");
+    body.set_restitution(0.4).expect("restitution is valid");
     let handle = world.add_body(body);
 
-    let force = Vec3::new(0.0, 10.0, 0.0);
-    let dt = 1.0 / 60.0;
-    let step_count = 60;
+    let mut ground = RigidBody::static_body(Vec3::ZERO)
+        .with_collision_shape(Plane::new(Vec3::Y).expect("plane normal is valid"));
+    ground.set_restitution(0.4).expect("restitution is valid");
+    world.add_body(ground);
 
-    println!("10 N applied 1 m right of a 2 kg body's center for 1 second");
-    println!("time (s) | y (m) | vy (m/s) | wz (rad/s) | local x axis");
+    let dt = 1.0 / 60.0;
+    let step_count = 180;
+
+    println!("Tilted 2 kg box falling onto a static plane");
+    println!("time (s) | x (m) | y (m) | angle (rad) | wz (rad/s) | contacts");
 
     for step in 0..=step_count {
         let body = world.body(handle).expect("body handle remains valid");
         if step % 15 == 0 {
             let local_x = body.orientation() * Vec3::X;
             println!(
-                "{:>8.2} | {:>5.3} | {:>8.3} | {:>10.3} | ({:>6.3}, {:>6.3})",
+                "{:>8.2} | {:>5.2} | {:>5.2} | {:>11.3} | {:>10.3} | {}",
                 step as f32 * dt,
+                body.position().x,
                 body.position().y,
-                body.velocity().y,
+                local_x.y.atan2(local_x.x),
                 body.angular_velocity().z,
-                local_x.x,
-                local_x.y,
+                world.contacts().len(),
             );
         }
 
         if step < step_count {
-            let body = world.body_mut(handle).expect("body handle remains valid");
-            let application_point = body.center_of_mass() + Vec3::X;
-            body.apply_force_at_point(force, application_point);
             world.step(dt).expect("fixed timestep is valid");
         }
     }

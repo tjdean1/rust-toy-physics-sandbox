@@ -4,7 +4,8 @@ use glam::Vec3;
 
 use crate::{
     CollisionShape, Contact, RigidBody,
-    collision::{resolve_contact, sphere_plane_contact, sphere_sphere_contact},
+    box_collision::{box_box_contact, box_plane_contact, sphere_box_contact},
+    collision::{ContactGeometry, resolve_contact, sphere_plane_contact, sphere_sphere_contact},
     integration::semi_implicit_euler,
 };
 
@@ -82,9 +83,9 @@ impl PhysicsWorld {
 
     /// Advances the simulation by `dt` seconds using semi-implicit Euler.
     ///
-    /// Collision detection runs after integration. Dynamic spheres collide with
-    /// static planes and other spheres using positional correction and a
-    /// frictionless normal impulse.
+    /// Collision detection runs after integration. Spheres and boxes use
+    /// positional correction and frictionless normal impulses; planes must be
+    /// static.
     ///
     /// Zero is accepted as a no-time step and still clears accumulated forces
     /// and torques. Negative, infinite, and NaN timesteps are rejected without
@@ -111,38 +112,9 @@ impl PhysicsWorld {
     fn generate_contacts(&self) -> Vec<Contact> {
         let mut contacts = Vec::new();
 
-        for (sphere_index, sphere_body) in self.bodies.iter().enumerate() {
-            if sphere_body.is_static() {
-                continue;
-            }
-
-            let Some(CollisionShape::Sphere(sphere)) = sphere_body.collision_shape() else {
-                continue;
-            };
-
-            for (plane_index, plane_body) in self.bodies.iter().enumerate() {
-                if !plane_body.is_static() {
-                    continue;
-                }
-
-                let Some(CollisionShape::Plane(plane)) = plane_body.collision_shape() else {
-                    continue;
-                };
-
-                if let Some(geometry) = sphere_plane_contact(sphere_body, sphere, plane_body, plane)
-                {
-                    contacts.push(Contact::new(
-                        BodyHandle(sphere_index),
-                        BodyHandle(plane_index),
-                        geometry,
-                    ));
-                }
-            }
-        }
-
         for body_a_index in 0..self.bodies.len() {
             let body_a = &self.bodies[body_a_index];
-            let Some(CollisionShape::Sphere(sphere_a)) = body_a.collision_shape() else {
+            let Some(shape_a) = body_a.collision_shape() else {
                 continue;
             };
 
@@ -152,11 +124,11 @@ impl PhysicsWorld {
                     continue;
                 }
 
-                let Some(CollisionShape::Sphere(sphere_b)) = body_b.collision_shape() else {
+                let Some(shape_b) = body_b.collision_shape() else {
                     continue;
                 };
 
-                if let Some(geometry) = sphere_sphere_contact(body_a, sphere_a, body_b, sphere_b) {
+                if let Some(geometry) = contact_geometry(body_a, shape_a, body_b, shape_b) {
                     contacts.push(Contact::new(
                         BodyHandle(body_a_index),
                         BodyHandle(body_b_index),
@@ -176,6 +148,42 @@ impl PhysicsWorld {
             let restitution = body_a.restitution().min(body_b.restitution());
             resolve_contact(body_a, body_b, contact, restitution);
         }
+    }
+}
+
+fn contact_geometry(
+    body_a: &RigidBody,
+    shape_a: CollisionShape,
+    body_b: &RigidBody,
+    shape_b: CollisionShape,
+) -> Option<ContactGeometry> {
+    match (shape_a, shape_b) {
+        (CollisionShape::Sphere(sphere_a), CollisionShape::Sphere(sphere_b)) => {
+            sphere_sphere_contact(body_a, sphere_a, body_b, sphere_b)
+        }
+        (CollisionShape::Sphere(sphere), CollisionShape::Plane(plane)) if body_b.is_static() => {
+            sphere_plane_contact(body_a, sphere, body_b, plane)
+        }
+        (CollisionShape::Plane(plane), CollisionShape::Sphere(sphere)) if body_a.is_static() => {
+            sphere_plane_contact(body_b, sphere, body_a, plane).map(ContactGeometry::flipped)
+        }
+        (CollisionShape::Box(box_a), CollisionShape::Box(box_b)) => {
+            box_box_contact(body_a, box_a, body_b, box_b)
+        }
+        (CollisionShape::Box(box_shape), CollisionShape::Plane(plane)) if body_b.is_static() => {
+            box_plane_contact(body_a, box_shape, body_b, plane.normal())
+        }
+        (CollisionShape::Plane(plane), CollisionShape::Box(box_shape)) if body_a.is_static() => {
+            box_plane_contact(body_b, box_shape, body_a, plane.normal())
+                .map(ContactGeometry::flipped)
+        }
+        (CollisionShape::Sphere(sphere), CollisionShape::Box(box_shape)) => {
+            sphere_box_contact(body_a, sphere, body_b, box_shape)
+        }
+        (CollisionShape::Box(box_shape), CollisionShape::Sphere(sphere)) => {
+            sphere_box_contact(body_b, sphere, body_a, box_shape).map(ContactGeometry::flipped)
+        }
+        _ => None,
     }
 }
 
